@@ -201,7 +201,18 @@ std::vector<std::wstring> cnocr::ocr_for_single_lines(std::vector<nc::NdArray<ui
 }
 std::wstring cnocr::ctc_best(nc::NdArray<uint32_t> data){
     std::wstring res;
-    for (auto i:data){
+    std::vector<uint32_t> vui;//消除重复的
+    for (auto i :data){
+        if (vui.size()!=0){
+            if (vui[vui.size()-1]!=i){
+                vui.push_back(i);
+            }
+        }
+        else{
+            vui.push_back(i);
+        }
+    }
+    for (auto i:vui){
         if (i<6673){
             res.push_back(ctc_data[i]);
         }

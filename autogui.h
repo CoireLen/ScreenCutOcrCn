@@ -17,6 +17,7 @@ public:
     ~clipboard();
     void setvalue(char * str);
     void setvalue(std::wstring str);
+    void setimg(unsigned char * img,u_int width,u_int height,size_t step1);
 };
 class autogui
 {
