@@ -12,7 +12,6 @@ void runscreencut();
 cnocr* pocr;
 autogui* pag;
 std::vector<std::thread> vt;
-u_char *g_img=NULL;//全局img缓存
 int main(int argc , char ** argv)
 {
     cnocr ocr;
@@ -20,8 +19,8 @@ int main(int argc , char ** argv)
     autogui ag;
     pag=&ag;
     HotKey hk;
-    hk.Register(MOD_ALT|MOD_NOREPEAT,0x43, runscreencutandocr);
-    hk.Register(MOD_ALT|MOD_NOREPEAT,0x41, runscreencut);
+    hk.Register(MOD_ALT|MOD_NOREPEAT,0x43,[](){ vt.push_back(std::thread(runscreencutandocr));});
+    hk.Register(MOD_ALT|MOD_NOREPEAT,0x41,[](){ vt.push_back(std::thread(runscreencut));} );
     Fl_Window *window;
     Fl_Box *box;
     window = new Fl_Window(300, 180);
@@ -37,8 +36,6 @@ int main(int argc , char ** argv)
     for(auto i_t=0;i_t<vt.size();i_t++){
         vt[i_t].join();
     }
-    if (g_img!=NULL)
-        free( g_img);
     return ret;
 }
 
@@ -60,11 +57,7 @@ void runscreencutandocr(){
 }
 void screencutandocr()
 {
-    if (g_img==NULL){
-        g_img=(u_char *)malloc(pag->ScreenSize.x*pag->ScreenSize.y*sizeof(u_char)*4);
-    }
-    pag->screen.capture(g_img);
-    unsigned char * img=g_img;
+    unsigned char * img=pag->screen.capture();
     cv::Mat matimg(pag->ScreenSize.y,pag->ScreenSize.x,CV_8UC4,img);
     cv::namedWindow("select rect",cv::WINDOW_NORMAL);
     cv::setWindowProperty("select rect",cv::WND_PROP_FULLSCREEN,cv::WINDOW_FULLSCREEN );//CV_WND_PROP_FULLSCREEN，CV_WINDOW_FULLSCREEN
@@ -99,15 +92,12 @@ void screencutandocr()
         clipboard cb;
         cb.setvalue(wstr);
     }
+    delete img;
 }
 
 
 void runscreencut(){
-    if (g_img==NULL){
-        g_img=(u_char *)malloc(pag->ScreenSize.x*pag->ScreenSize.y*sizeof(u_char)*4);
-    }
-    pag->screen.capture(g_img);
-    auto img=g_img;
+    unsigned char * img=pag->screen.capture();
     cv::Mat matimg(pag->ScreenSize.y,pag->ScreenSize.x,CV_8UC4,img);
     cv::namedWindow("select rect",cv::WINDOW_NORMAL);
     cv::setWindowProperty("select rect",cv::WND_PROP_FULLSCREEN,cv::WINDOW_FULLSCREEN );//CV_WND_PROP_FULLSCREEN，CV_WINDOW_FULLSCREEN
