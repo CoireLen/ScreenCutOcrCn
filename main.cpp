@@ -25,7 +25,7 @@ int main(int argc , char ** argv)
     Fl_Window *window;
     Fl_Box *box;
     window = new Fl_Window(300, 180);
-    window->label("HelloWorld!");
+    window->label("Ocr Tool");
     box = new Fl_Box(20, 40, 260, 100, "Alt_C");
     box->box(FL_UP_BOX);
     box->labelsize(36);
@@ -90,10 +90,11 @@ void screencutandocr()
     if (wdo!=true)
     {
         auto imgrect = matimg(cv::Rect(rect[0], rect[1], rect[2] - rect[0], rect[3] - rect[1]));
-        auto qout = pocr->ocr(imgrect);
+        cv::UMat umat=imgrect.getUMat(cv::ACCESS_READ);
+        auto qout = pocr->ocr(umat);
         std::wstring wstr;
         for (auto ws:qout){
-            wstr.append(ws);
+            wstr.append(ws.first);
             wstr.push_back('\n');
         }
         clipboard cb;
