@@ -1,7 +1,6 @@
 #include <windows.h>
 #include <random>
 #include <vector>
-#include "screencut.h"
 struct ScreenZoom
 {
     double x;
@@ -31,7 +30,6 @@ private:
     
     /* data */
 public:
-    screencut screen;
     clipboard clipboard;
     std::vector<HWND> FindWindowByName(char * classname,char * windowname); //取得所有匹配的窗口句柄
     RECT GetRect(HWND hwnd);

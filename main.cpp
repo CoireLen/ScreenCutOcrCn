@@ -3,10 +3,22 @@
 #include "autogui.h"
 #include "cnocr.h"
 #include "hotkey.hpp"
-#include <FL/Fl.H>
-#include <FL/Fl_Window.H>
-#include <FL/Fl_Box.H>
 #include <opencv2/highgui.hpp>
+#include <QtWidgets/QDialog>
+#include <QtGui/QGuiApplication>
+#include <QtWidgets/QApplication>
+#include <QtGui/QScreen>
+#include <thread>
+class SCOC_Dialog:public QDialog{
+    private:
+        void InitUi();
+    public:
+        SCOC_Dialog(QWidget *praent=nullptr){InitUi();};
+};
+void SCOC_Dialog::InitUi() {
+    this->show();
+    this->setWindowTitle("SCOC");
+}
 void runscreencutandocr();
 void runscreencut();
 cnocr* pocr;
@@ -22,24 +34,9 @@ int main(int argc , char ** argv)
     HotKey hk;
     hk.Register(MOD_ALT|MOD_NOREPEAT,0x43, runscreencutandocr);
     hk.Register(MOD_ALT|MOD_NOREPEAT,0x41, runscreencut);
-    Fl_Window *window;
-    Fl_Box *box;
-    window = new Fl_Window(300, 180);
-    window->label("Ocr Tool");
-    box = new Fl_Box(20, 40, 260, 100, "Alt_C");
-    box->box(FL_UP_BOX);
-    box->labelsize(36);
-    box->labelfont(FL_BOLD + FL_ITALIC);
-    (FL_SHADOW_LABEL);
-    window->end();
-    window->show(argc, argv);
-    int ret= Fl::run();
-    for(auto i_t=0;i_t<vt.size();i_t++){
-        vt[i_t].join();
-    }
-    if (g_img!=NULL)
-        free( g_img);
-    return ret;
+    QApplication app(argc,argv);
+    //SCOC_Dialog m_dialog;
+    return app.exec();
 }
 
 
@@ -58,14 +55,24 @@ void screencutandocr();
 void runscreencutandocr(){
     vt.push_back(std::thread(screencutandocr));
 }
+
+cv::Mat QPixmapToMat(const QPixmap &pixmap) {
+    QImage qim=pixmap.toImage();
+     cv::Mat mat = cv::Mat(qim.height(), qim.width(), 
+         CV_8UC4,(void*)qim.constBits(),qim.bytesPerLine());
+     return mat;
+
+}
+
 void screencutandocr()
 {
-    if (g_img==NULL){
-        g_img=(u_char *)malloc(pag->ScreenSize.x*pag->ScreenSize.y*sizeof(u_char)*4);
-    }
-    pag->screen.capture(g_img);
-    unsigned char * img=g_img;
-    cv::Mat matimg(pag->ScreenSize.y,pag->ScreenSize.x,CV_8UC4,img);
+    QScreen *screen = QGuiApplication::primaryScreen();
+    std::cout <<"screen:"<<screen<<std::endl;
+    QRect screenGeometry = screen->geometry();
+    std::cout <<"Get Screen Size:"<<screenGeometry.width()<<"x"<<screenGeometry.height()<<std::endl;
+    QPixmap screenshot = screen->grabWindow(0, screenGeometry.x(), screenGeometry.y(),
+                                                screenGeometry.width(), screenGeometry.height());
+    cv::Mat matimg=QPixmapToMat(screenshot);
     cv::namedWindow("select rect",cv::WINDOW_NORMAL);
     cv::setWindowProperty("select rect",cv::WND_PROP_FULLSCREEN,cv::WINDOW_FULLSCREEN );//CV_WND_PROP_FULLSCREEN，CV_WINDOW_FULLSCREEN
     struct cvmousedrawrectdata mddate;
@@ -104,12 +111,11 @@ void screencutandocr()
 
 
 void runscreencut(){
-    if (g_img==NULL){
-        g_img=(u_char *)malloc(pag->ScreenSize.x*pag->ScreenSize.y*sizeof(u_char)*4);
-    }
-    pag->screen.capture(g_img);
-    auto img=g_img;
-    cv::Mat matimg(pag->ScreenSize.y,pag->ScreenSize.x,CV_8UC4,img);
+    QScreen *screen = QGuiApplication::primaryScreen();
+    QRect screenGeometry = screen->geometry();
+    QPixmap screenshot = screen->grabWindow(0, screenGeometry.x(), screenGeometry.y(),
+                                                screenGeometry.width(), screenGeometry.height());
+    cv::Mat matimg=QPixmapToMat(screenshot);
     cv::namedWindow("select rect",cv::WINDOW_NORMAL);
     cv::setWindowProperty("select rect",cv::WND_PROP_FULLSCREEN,cv::WINDOW_FULLSCREEN );//CV_WND_PROP_FULLSCREEN，CV_WINDOW_FULLSCREEN
     struct cvmousedrawrectdata mddate;
