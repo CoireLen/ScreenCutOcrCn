@@ -1,20 +1,81 @@
 #include "autogui.h"
+
+#include <cstring>
+#include <iostream>
 #include <string.h>
 
-autogui::autogui(/* args */)
+namespace {
+
+// 其他程序可能短暂占用剪贴板，重试几次再放弃
+bool open_clipboard() {
+    constexpr int kMaxAttempts = 5;
+    for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
+        if (OpenClipboard(nullptr)) {
+            return true;
+        }
+        Sleep(20);
+    }
+    std::cerr << "打开剪贴板失败，错误码: " << GetLastError() << std::endl;
+    return false;
+}
+
+bool set_clipboard_text(UINT format, const void* data, size_t bytes) {
+    if (data == nullptr || bytes == 0) {
+        std::cerr << "剪贴板数据为空" << std::endl;
+        return false;
+    }
+    HGLOBAL handle = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (handle == nullptr) {
+        std::cerr << "剪贴板内存分配失败，错误码: " << GetLastError() << std::endl;
+        return false;
+    }
+    void* locked = GlobalLock(handle);
+    if (locked == nullptr) {
+        std::cerr << "剪贴板内存锁定失败，错误码: " << GetLastError() << std::endl;
+        GlobalFree(handle);
+        return false;
+    }
+    std::memcpy(locked, data, bytes);
+    GlobalUnlock(handle);
+
+    if (!open_clipboard()) {
+        GlobalFree(handle);
+        return false;
+    }
+    EmptyClipboard();
+    if (SetClipboardData(format, handle) == nullptr) {
+        std::cerr << "写入剪贴板失败，错误码: " << GetLastError() << std::endl;
+        GlobalFree(handle);  // 失败时所有权未转移
+        CloseClipboard();
+        return false;
+    }
+    CloseClipboard();
+    return true;
+}
+
+}  // namespace
+
+autogui::autogui()
 {
     RandValue10_30=std::uniform_int_distribution<unsigned> (10,30);
-    DEVMODE dm;
+
+    int cx = GetSystemMetrics(SM_CXSCREEN);
+    int cy = GetSystemMetrics(SM_CYSCREEN);
+
+    DEVMODE dm{};
     dm.dmSize = sizeof(dm);
-    dm.dmDriverExtra = 0;
-    MONITORINFOEX miex;
-    HWND hWnd = GetDesktopWindow();
-    HMONITOR hMonitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+    MONITORINFOEX miex{};
     miex.cbSize = sizeof(miex);
-    GetMonitorInfo(hMonitor, &miex);
-    EnumDisplaySettings(miex.szDevice, ENUM_CURRENT_SETTINGS, &dm);
-    int cx= dm.dmPelsWidth;
-    int cy = dm.dmPelsHeight;
+    const HMONITOR hMonitor = MonitorFromWindow(GetDesktopWindow(), MONITOR_DEFAULTTONEAREST);
+    if (GetMonitorInfo(hMonitor, &miex) != 0 &&
+        EnumDisplaySettings(miex.szDevice, ENUM_CURRENT_SETTINGS, &dm) != 0) {
+        cx = static_cast<int>(dm.dmPelsWidth);
+        cy = static_cast<int>(dm.dmPelsHeight);
+    }
+    if (cx <= 0 || cy <= 0) {
+        std::cerr << "无法获取屏幕尺寸，鼠标点击功能不可用" << std::endl;
+        return;
+    }
     ScreenSize={cx,cy};
     Zoom={65535.0/cx,65535.0/cy};
 }
@@ -42,7 +103,7 @@ POINT autogui::MouseLocation(){
     GetCursorPos(&p);
     return p;
 }
-std::vector<HWND> autogui::FindWindowByName(char *classname,char * windowname){
+std::vector<HWND> autogui::FindWindowByName(const char *classname,const char* windowname){
     std::vector<HWND> vHWND;
     HWND hwnd=FindWindowA(classname,windowname);
     if (hwnd==NULL){
@@ -58,7 +119,7 @@ RECT autogui::GetRect(HWND hwnd){
     RECT rt={0,0,0,0};
     if (GetWindowRect(hwnd,&rt)==0)
     {
-        printf("GetWindowRect Fail\n");
+        std::cerr << "GetWindowRect 失败，错误码: " << GetLastError() << std::endl;
     }
     return rt;
 }
@@ -70,112 +131,80 @@ std::vector<RECT> autogui::GetRect(std::vector<HWND> hwnd){
     return vRECT;
 }
 
-
-clipboard::clipboard(/* args */)
-{
+bool clipboard::setvalue(const char * str){
+    if (str == nullptr) {
+        std::cerr << "剪贴板文本为空指针" << std::endl;
+        return false;
+    }
+    // Win32 剪贴板只接受 UTF-16，先按 UTF-8 解码
+    const int length = MultiByteToWideChar(CP_UTF8, 0, str, -1, nullptr, 0);
+    if (length <= 0) {
+        std::cerr << "剪贴板文本不是合法的 UTF-8，错误码: " << GetLastError() << std::endl;
+        return false;
+    }
+    std::wstring wide(static_cast<size_t>(length), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, str, -1, wide.data(), length);
+    wide.resize(static_cast<size_t>(length - 1));
+    return setvalue(wide);
 }
 
-clipboard::~clipboard()
-{
+bool clipboard::setvalue(const std::wstring& str){
+    const size_t bytes = (str.size() + 1) * sizeof(wchar_t);
+    return set_clipboard_text(CF_UNICODETEXT, str.c_str(), bytes);
 }
-void clipboard::setvalue(char * str){
-    if (OpenClipboard(GetActiveWindow())){
-        EmptyClipboard();
-        int b = strnlen(str,1000);
-        int size =sizeof(char)* (b+1);
-        LPWSTR pData = (LPWSTR)GlobalAlloc(GMEM_MOVEABLE,size);
-        if (pData ==NULL){
-            printf("clipboard alloc mem fail");
-            return;
-        }
-        auto hData=GlobalLock(pData);
-        if (hData==NULL){
-            printf("clipboard lock mem fail");
-            return;
-        }
-        if (size < 1000)
-            memcpy(hData,(void *)str, size);
-        GlobalUnlock(hData);
-        if (SetClipboardData(CF_TEXT,hData)==NULL){
-            CloseClipboard();
-            printf("set clipboard data fail");
-            return;
-        }
+
+bool clipboard::setimg(const unsigned char * img,int width,int height,size_t step){
+    if (img == nullptr || width <= 0 || height <= 0 ||
+        step < static_cast<size_t>(width) * 4) {
+        std::cerr << "剪贴板图片参数非法: " << width << "x" << height
+                  << " step=" << step << std::endl;
+        return false;
+    }
+
+    const size_t row_bytes = static_cast<size_t>(width) * 4;
+    const size_t image_bytes = row_bytes * static_cast<size_t>(height);
+    constexpr size_t kHeaderBytes = sizeof(BITMAPINFOHEADER);
+
+    // 写入标准 CF_DIB（自底向上 32 位），各程序兼容性最好，Windows 可据此合成 CF_BITMAP
+    HGLOBAL dib = GlobalAlloc(GMEM_MOVEABLE, kHeaderBytes + image_bytes);
+    if (dib == nullptr) {
+        std::cerr << "剪贴板图片内存分配失败，错误码: " << GetLastError() << std::endl;
+        return false;
+    }
+    auto* header = static_cast<BITMAPINFOHEADER*>(GlobalLock(dib));
+    if (header == nullptr) {
+        std::cerr << "剪贴板图片内存锁定失败，错误码: " << GetLastError() << std::endl;
+        GlobalFree(dib);
+        return false;
+    }
+    *header = {};
+    header->biSize = sizeof(BITMAPINFOHEADER);
+    header->biWidth = width;
+    header->biHeight = height;  // 正值 = 自底向上，兼容性最好
+    header->biPlanes = 1;
+    header->biBitCount = 32;
+    header->biCompression = BI_RGB;
+    header->biSizeImage = static_cast<DWORD>(image_bytes);
+    auto* destination = reinterpret_cast<unsigned char*>(header) + kHeaderBytes;
+    for (int y = 0; y < height; ++y) {
+        const unsigned char* source_row =
+            img + static_cast<size_t>(height - 1 - y) * step;
+        std::memcpy(destination + static_cast<size_t>(y) * row_bytes,
+                    source_row, row_bytes);
+    }
+    GlobalUnlock(dib);
+
+    if (!open_clipboard()) {
+        GlobalFree(dib);
+        return false;
+    }
+    EmptyClipboard();
+    if (SetClipboardData(CF_DIB, dib) == nullptr) {
+        std::cerr << "写入剪贴板图片失败，错误码: " << GetLastError() << std::endl;
+        GlobalFree(dib);  // 失败时所有权未转移
         CloseClipboard();
+        return false;
     }
-    else{
-        printf("opencliboard fail");
-    }
-}
-void clipboard::setvalue(std::wstring str){
-    if (OpenClipboard(GetActiveWindow())){
-        EmptyClipboard();
-        int b = str.length();
-        int size =sizeof(str[0])* (b+1);
-        LPWSTR pData = (LPWSTR)GlobalAlloc(GMEM_MOVEABLE,size);
-        if (pData ==NULL){
-            printf("clipboard alloc mem fail");
-            return;
-        }
-        auto hData=GlobalLock(pData);
-        if (hData==NULL){
-            printf("clipboard lock mem fail");
-            return;
-        }
-        if (size < 1000)
-            memcpy(hData,(void *)str.data(), size);
-        GlobalUnlock(hData);
-        if (SetClipboardData(CF_UNICODETEXT,hData)==NULL){
-            CloseClipboard();
-            printf("set clipboard data fail");
-            return;
-        }
-        CloseClipboard();
-    }
-    else{
-        printf("opencliboard fail");
-    }
-}
-void rotateImg(unsigned char *pImgData,int iWidth,int iHeight)
-{
-	unsigned int* pImg32 = (unsigned int*)pImgData;
-	int iCount = iWidth * iHeight;
-	unsigned int* pRotateImg32 = new unsigned int[iCount];
-	for (int i = 0; i < iCount; ++ i) {
-		pRotateImg32[i] = pImg32[iCount - i - 1];
-	}
- 
-	unsigned int* pRotateImg32_r = (unsigned int*)pImgData;
-	for (int i = 0; i < iHeight; ++ i) {
-		for (int j = 0; j < iWidth; ++ j) {
-			pRotateImg32_r[j + i * iWidth] = pRotateImg32[iWidth - j - 1 + i * iWidth];
-		}
-	}
-	delete [] pRotateImg32;
-}
-void clipboard::setimg(unsigned char * img,u_int width,u_int height,size_t step1){
-    if (OpenClipboard(GetActiveWindow())){
-        EmptyClipboard();
-        BITMAP bm={0};
-        bm.bmWidth=width;
-        bm.bmHeight=height;
-        bm.bmBits=img;
-        bm.bmPlanes=1;
-        bm.bmWidthBytes=step1;
-        bm.bmBitsPixel=32;
-        auto hbm=CreateBitmapIndirect(&bm);
-        if (hbm==NULL){
-             printf("CreateBitmap fail");
-            return;
-        }
-        if (SetClipboardData(CF_BITMAP,hbm)==NULL){
-            CloseClipboard();
-            printf("set clipboard data fail");
-            return;
-        }
-        CloseClipboard();
-    }
-    else{
-        printf("opencliboard fail");
-    }
+    CloseClipboard();
+    return true;
 }
