@@ -1,4 +1,5 @@
 #include <atomic>
+#include <chrono>
 #include <exception>
 #include <iostream>
 #include <memory>
@@ -11,6 +12,7 @@
 #include <QApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QImage>
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QRunnable>
@@ -21,6 +23,7 @@
 #include "autogui.h"
 #include "cnocr.h"
 #include "hotkey.hpp"
+#include "main_window.h"
 #include "screen_capture.h"
 
 namespace {
@@ -28,6 +31,7 @@ namespace {
 std::unique_ptr<cnocr> g_ocr;    // 主线程构造，识别线程只读
 std::atomic_bool g_busy{false};  // 同一时刻只允许一个截图/识别流程
 std::atomic_bool g_alive{true};  // 退出时阻止工作线程再向 GUI 线程投递
+MainWindow* g_window = nullptr;  // 仅在 GUI 线程访问
 
 // 模型与字典按相对路径加载，启动前检查，缺失时给出绝对路径便于排查
 bool check_models(QString* missing) {
@@ -50,11 +54,21 @@ bool check_models(QString* missing) {
     return false;
 }
 
+QImage mat_to_qimage_bgra(const cv::Mat& mat) {
+    if (mat.empty() || mat.type() != CV_8UC4) {
+        return {};
+    }
+    const QImage view(mat.data, mat.cols, mat.rows, static_cast<int>(mat.step),
+                      QImage::Format_ARGB32);
+    return view.copy();
+}
+
 class OcrTask : public QRunnable {
 public:
     explicit OcrTask(cv::Mat image) : image_(std::move(image)) {}
 
     void run() override {
+        const auto start = std::chrono::steady_clock::now();
         std::wstring text;
         std::string error;
         int line_count = 0;
@@ -72,20 +86,40 @@ public:
         } catch (...) {
             error = "未知异常";
         }
+        const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() - start)
+                                    .count();
         g_busy.store(false);
         if (!g_alive.load()) {
             return;
         }
         QMetaObject::invokeMethod(
             qApp,
-            [text = std::move(text), error = std::move(error), line_count]() {
+            [text = std::move(text), error = std::move(error), line_count, elapsed_ms]() {
                 if (!error.empty()) {
-                    show_toast(
-                        QStringLiteral("识别失败: %1").arg(QString::fromUtf8(error.c_str())));
+                    const QString message = QString::fromUtf8(error.c_str());
+                    show_toast(QStringLiteral("识别失败: %1").arg(message));
+                    if (g_window != nullptr) {
+                        g_window->log(QStringLiteral("识别失败: %1").arg(message));
+                    }
                     return;
                 }
+                QString content = QString::fromStdWString(text);
+                if (content.endsWith(QLatin1Char('\n'))) {
+                    content.chop(1);
+                }
                 clipboard cb;
-                if (!cb.setvalue(text)) {
+                const bool copied = cb.setvalue(content.toStdWString());
+                if (g_window != nullptr) {
+                    g_window->addRecognition(content);
+                    g_window->log(QStringLiteral("识别完成：%1 行，耗时 %2 ms")
+                                      .arg(line_count)
+                                      .arg(elapsed_ms));
+                    if (!copied) {
+                        g_window->log(QStringLiteral("写入剪贴板失败，剪贴板可能被占用"));
+                    }
+                }
+                if (!copied) {
                     show_toast(QStringLiteral("识别完成，但写入剪贴板失败，剪贴板可能被占用"));
                     return;
                 }
@@ -100,28 +134,45 @@ private:
     cv::Mat image_;
 };
 
+void note(const QString& message) {
+    if (g_window != nullptr) {
+        g_window->log(message);
+    }
+}
+
 void capture_and_ocr() {
     if (g_busy.exchange(true)) {
         show_toast(QStringLiteral("正在处理中，请稍候"));
+        note(QStringLiteral("忽略触发：上一个截图/识别任务尚未完成"));
         return;
     }
+    note(QStringLiteral("开始框选（识别流程）"));
     QString error;
     const auto selection = capture_and_select(&error);
     if (!selection) {
         g_busy.store(false);
         if (!error.isEmpty()) {
             show_toast(QStringLiteral("截图失败: %1").arg(error));
+            note(QStringLiteral("截图失败: %1").arg(error));
+        } else {
+            note(QStringLiteral("已取消框选"));
         }
         return;
     }
 
+    const cv::Mat region = selection->image(selection->region);
+    if (g_window != nullptr) {
+        g_window->addScreenshot(mat_to_qimage_bgra(region));
+    }
+
     cv::Mat bgr;
     try {
-        cv::cvtColor(selection->image(selection->region), bgr, cv::COLOR_BGRA2BGR);
+        cv::cvtColor(region, bgr, cv::COLOR_BGRA2BGR);
     } catch (const cv::Exception& e) {
         g_busy.store(false);
-        show_toast(QStringLiteral("截图处理失败: %1")
-                       .arg(QString::fromUtf8(e.what())));
+        const QString message = QString::fromUtf8(e.what());
+        show_toast(QStringLiteral("截图处理失败: %1").arg(message));
+        note(QStringLiteral("截图处理失败: %1").arg(message));
         return;
     }
     QThreadPool::globalInstance()->start(new OcrTask(std::move(bgr)));
@@ -130,24 +181,39 @@ void capture_and_ocr() {
 void capture_to_clipboard() {
     if (g_busy.exchange(true)) {
         show_toast(QStringLiteral("正在处理中，请稍候"));
+        note(QStringLiteral("忽略触发：上一个截图/识别任务尚未完成"));
         return;
     }
+    note(QStringLiteral("开始框选（截图流程）"));
     QString error;
     const auto selection = capture_and_select(&error);
     if (!selection) {
         g_busy.store(false);
         if (!error.isEmpty()) {
             show_toast(QStringLiteral("截图失败: %1").arg(error));
+            note(QStringLiteral("截图失败: %1").arg(error));
+        } else {
+            note(QStringLiteral("已取消框选"));
         }
         return;
     }
     // clone 保证位图数据连续（setimg 用 step 描述每行字节数）
     const cv::Mat region = selection->image(selection->region).clone();
+    if (g_window != nullptr) {
+        g_window->addScreenshot(mat_to_qimage_bgra(region));
+    }
     clipboard cb;
     const bool copied = cb.setimg(region.data, region.cols, region.rows, region.step1());
     g_busy.store(false);
-    show_toast(copied ? QStringLiteral("截图已复制到剪贴板")
-                      : QStringLiteral("复制到剪贴板失败，剪贴板可能被占用"));
+    if (copied) {
+        show_toast(QStringLiteral("截图已复制到剪贴板"));
+        note(QStringLiteral("截图 %1 × %2 已复制到剪贴板")
+                 .arg(region.cols)
+                 .arg(region.rows));
+    } else {
+        show_toast(QStringLiteral("复制到剪贴板失败，剪贴板可能被占用"));
+        note(QStringLiteral("复制截图到剪贴板失败"));
+    }
 }
 
 }  // namespace
@@ -158,6 +224,8 @@ int main(int argc, char** argv) {
     SetConsoleCP(CP_UTF8);
 
     QApplication app(argc, argv);
+    QApplication::setApplicationName(QStringLiteral("ScreenCutOcrCn"));
+    QApplication::setOrganizationName(QStringLiteral("CoireLen"));
     QApplication::setQuitOnLastWindowClosed(false);
 
     QString missing;
@@ -188,6 +256,16 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    MainWindow window;
+    g_window = &window;
+    QObject::connect(&window, &MainWindow::screenshotRequested, &window,
+                     [] { capture_to_clipboard(); });
+    QObject::connect(&window, &MainWindow::ocrRequested, &window,
+                     [] { capture_and_ocr(); });
+    window.log(QStringLiteral("ScreenCutOcrCn 启动，OCR 引擎加载完成"));
+    window.log(QStringLiteral("工作目录: %1").arg(QDir::currentPath()));
+    window.show();
+
     // 热键回调在独立线程，截图/UI 必须排队回 GUI 线程执行
     HotKey hotkey;
     QStringList failed_hotkeys;
@@ -201,18 +279,22 @@ int main(int argc, char** argv) {
         })) {
         failed_hotkeys << QStringLiteral("Alt+A（截图并复制图片）");
     }
-    if (!failed_hotkeys.isEmpty()) {
+    if (failed_hotkeys.isEmpty()) {
+        window.log(QStringLiteral("热键注册成功：Alt+C 识别，Alt+A 截图"));
+    } else {
         const QString message =
             QStringLiteral("以下热键注册失败，可能已被其他程序占用:\n%1\n\n"
                            "程序仍会继续运行，但对应的功能无法通过热键触发。")
                 .arg(failed_hotkeys.join(QLatin1Char('\n')));
         std::cerr << message.toStdString() << std::endl;
-        QMessageBox::warning(nullptr, QStringLiteral("ScreenCutOcrCn"), message);
+        window.log(message);
+        QMessageBox::warning(&window, QStringLiteral("ScreenCutOcrCn"), message);
     }
 
     const int code = app.exec();
     g_alive.store(false);
     // 等待识别线程结束，避免退出后仍访问 OCR 引擎
     QThreadPool::globalInstance()->waitForDone();
+    g_window = nullptr;
     return code;
 }

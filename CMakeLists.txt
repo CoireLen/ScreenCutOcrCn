@@ -10,6 +10,7 @@ project(ScreenCutOcrCn VERSION 0.1.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_AUTOMOC ON)
 
 # onnxruntime 解压目录，需包含 include/ 与 lib/
 set(ONNXRUNTIME_ROOT "E:/Lib/onnxruntime-win-x64-1.31.1" CACHE PATH "ONNX Runtime root directory")
@@ -32,6 +33,7 @@ find_package(Qt6 COMPONENTS Widgets Gui Core REQUIRED)
 
 add_executable(ScreenCutOcrCn
     main.cpp
+    main_window.h main_window.cpp
     screen_capture.h screen_capture.cpp
     cnocr.h cnocr.cpp
     cnstd.h cnstd.cpp
@@ -53,6 +55,14 @@ target_link_libraries(ScreenCutOcrCn PRIVATE
     "${ONNXRUNTIME_ROOT}/lib/onnxruntime.lib"
     Qt6::Widgets Qt6::Gui Qt6::Core
 )
+
+# Release 使用 Windows 子系统，启动时不弹出控制台窗口；Debug 保留控制台便于查看日志
+if(MSVC)
+    target_link_options(ScreenCutOcrCn PRIVATE
+        "$<$<CONFIG:Release>:/SUBSYSTEM:WINDOWS>"
+        "$<$<CONFIG:Release>:/ENTRY:mainCRTStartup>"
+    )
+endif()
 
 # 运行时依赖：onnxruntime 的 DLL 拷到输出目录；OpenCV 的 DLL 由 vcpkg applocal 自动部署
 add_custom_command(TARGET ScreenCutOcrCn POST_BUILD
