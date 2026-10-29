@@ -5,6 +5,7 @@
 
 #include <opencv2/core.hpp>
 
+#include <QImage>
 #include <QString>
 
 struct ScreenSelection {
@@ -19,6 +20,10 @@ struct ScreenSelection {
 /// @param error 非空时在失败时写入原因；用户主动取消时不写入
 /// @return 取消或截图失败时返回 std::nullopt
 std::optional<ScreenSelection> capture_and_select(QString* error = nullptr);
+
+/// @brief 仅抓取主屏（不弹选区），用于长截图连续取帧
+/// @note 必须在 GUI 线程调用
+QImage grab_primary_screen();
 
 /// @brief 在屏幕上方短暂显示一条状态提示
 void show_toast(const QString& text);

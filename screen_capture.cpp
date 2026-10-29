@@ -351,8 +351,15 @@ std::optional<ScreenSelection> capture_and_select(QString* error) {
                             cv::Rect(region.x(), region.y(), region.width(), region.height()) };
 }
 
-void show_toast(const QString& text) {
-    static QPointer<QLabel> current;
+QImage grab_primary_screen() {
+    QScreen* screen = QGuiApplication::primaryScreen();
+    if (screen == nullptr) {
+        return {};
+    }
+    return grab_screen(screen);
+}
+
+void show_toast(const QString& text) {    static QPointer<QLabel> current;
     if (!current.isNull()) {
         current->close();  // 上一个提示由 WA_DeleteOnClose 接管释放
     }

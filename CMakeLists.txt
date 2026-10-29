@@ -35,6 +35,9 @@ add_executable(ScreenCutOcrCn
     main.cpp
     main_window.h main_window.cpp
     screen_capture.h screen_capture.cpp
+    long_capture.h long_capture.cpp
+    hotkey_config.h hotkey_config.cpp
+    hotkey_service.h hotkey_service.cpp
     cnocr.h cnocr.cpp
     cnstd.h cnstd.cpp
     modle.h modle.cpp
